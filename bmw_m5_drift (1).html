@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>BMW M5 Drift</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#050505;font-family:Arial,sans-serif}
+#hud{position:fixed;z-index:10;top:18px;left:18px;color:white;background:rgba(0,0,0,.55);padding:12px 16px;border-radius:12px;font-size:18px;line-height:1.55;backdrop-filter:blur(5px)}
+#title{font-size:25px;font-weight:800}
+#help{position:fixed;z-index:10;bottom:18px;left:50%;transform:translateX(-50%);color:white;background:rgba(0,0,0,.6);padding:10px 16px;border-radius:12px;text-align:center}
+#start{position:fixed;z-index:20;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle,#26344a,#050505);color:white}
+.panel{text-align:center;background:rgba(0,0,0,.7);padding:32px;border-radius:20px;max-width:420px}
+button{border:0;border-radius:12px;padding:13px 25px;font-size:18px;font-weight:bold;cursor:pointer}
+#startBtn{background:#fff;color:#111}
+</style>
+</head>
+<body>
+<div id="start">
+  <div class="panel">
+    <h1>🏁 BMW M5 Drift</h1>
+    <p>Drive a stylized BMW M5 around a 3D drift circuit.</p>
+    <p><b>W / ↑</b> accelerate &nbsp; <b>S / ↓</b> brake/reverse<br>
+       <b>A,D / ←,→</b> steer &nbsp; <b>Space</b> handbrake</p>
+    <button id="startBtn">START DRIFTING</button>
+  </div>
+</div>
+
+<div id="hud">
+  <div id="title">BMW M5 DRIFT</div>
+  Speed: <span id="speed">0</span> km/h<br>
+  Drift: <span id="drift">0</span>°<br>
+  Score: <span id="score">0</span>
+</div>
+<div id="boost" style="position:fixed;z-index:10;right:18px;top:18px;color:white;background:rgba(0,0,0,.55);padding:12px 16px;border-radius:12px;font-weight:800;font-size:18px">BOOST<br><span style="font-size:13px;font-weight:normal">SHIFT</span></div>
+<div id="help">WASD / Arrow Keys • SPACE = Handbrake • SHIFT = BOOST</div>
+
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87b9df);
+scene.fog = new THREE.Fog(0x87b9df, 90, 240);
+
+const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, .1, 500);
+camera.position.set(0,7,12);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xcfe8ff,0x35502f,2));
+const sun = new THREE.DirectionalLight(0xffffff,2.5);
+sun.position.set(40,80,30); sun.castShadow=true; scene.add(sun);
+
+// Ground
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(500,500),
+  new THREE.MeshStandardMaterial({color:0x315c35,roughness:1})
+);
+ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; scene.add(ground);
+
+// Track: large rounded-ish loop made from segments
+const trackGroup = new THREE.Group();
+scene.add(trackGroup);
+const radiusX=48, radiusZ=72, roadW=14;
+const segments=96;
+const centerline=[];
+for(let i=0;i<segments;i++){
+  const a=i/segments*Math.PI*2;
+  centerline.push(new THREE.Vector3(Math.cos(a)*radiusX,0.02,Math.sin(a)*radiusZ));
+}
+function addRoadStrip(){
+  const verts=[], idx=[];
+  for(let i=0;i<segments;i++){
+    const a=centerline[i], b=centerline[(i+1)%segments];
+    const dx=b.x-a.x, dz=b.z-a.z, len=Math.hypot(dx,dz);
+    const nx=-dz/len, nz=dx/len;
+    verts.push(a.x+nx*roadW/2,.025,a.z+nz*roadW/2);
+    verts.push(a.x-nx*roadW/2,.025,a.z-nz*roadW/2);
+  }
+  for(let i=0;i<segments;i++){
+    const n=(i+1)%segments;
+    idx.push(i*2,i*2+1,n*2,n*2,n*2+1,i*2+1);
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));
+  g.setIndex(idx); g.computeVertexNormals();
+  const m=new THREE.MeshStandardMaterial({color:0x202124,roughness:.9});
+  const road=new THREE.Mesh(g,m); road.receiveShadow=true; trackGroup.add(road);
+}
+addRoadStrip();
+
+// Lane markings
+for(let i=0;i<segments;i+=2){
+  const p=centerline[i], q=centerline[(i+1)%segments];
+  const mark=new THREE.Mesh(new THREE.BoxGeometry(.35,.05,3.2),
+    new THREE.MeshBasicMaterial({color:0xf4f0c8}));
+  mark.position.copy(p); mark.position.y=.08;
+  const dx=q.x-p.x,dz=q.z-p.z;
+  mark.rotation.y=Math.atan2(dx,dz);
+  trackGroup.add(mark);
+}
+
+// Curbs
+for(const side of [-1,1]){
+  for(let i=0;i<segments;i+=2){
+    const p=centerline[i], q=centerline[(i+1)%segments];
+    const dx=q.x-p.x,dz=q.z-p.z,len=Math.hypot(dx,dz);
+    const nx=-dz/len,nz=dx/len;
+    const curb=new THREE.Mesh(new THREE.BoxGeometry(1.1,.16,3.2),
+      new THREE.MeshStandardMaterial({color:(i/2)%2?0xffffff:0xd71920}));
+    curb.position.set(p.x+nx*side*(roadW/2+.55),.12,p.z+nz*side*(roadW/2+.55));
+    curb.rotation.y=Math.atan2(dx,dz);
+    trackGroup.add(curb);
+  }
+}
+
+// Trees
+function tree(x,z){
+  const g=new THREE.Group();
+  const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.35,.45,3,8),
+    new THREE.MeshStandardMaterial({color:0x6b4023}));
+  trunk.position.y=1.5; g.add(trunk);
+  const crown=new THREE.Mesh(new THREE.ConeGeometry(2.5,6,9),
+    new THREE.MeshStandardMaterial({color:0x176b32}));
+  crown.position.y=5; g.add(crown);
+  g.position.set(x,0,z); scene.add(g);
+}
+for(let i=0;i<55;i++){
+  const a=Math.random()*Math.PI*2, r=68+Math.random()*42;
+  tree(Math.cos(a)*r,Math.sin(a)*r*1.25);
+}
+for(let i=0;i<24;i++){
+  const a=(i/24)*Math.PI*2 + (Math.random()-.5)*.08;
+  const r=82+Math.random()*25;
+  const w=5+Math.random()*7, d=5+Math.random()*8, h=7+Math.random()*18;
+  const b=new THREE.Group();
+  const base=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),
+    new THREE.MeshStandardMaterial({color:new THREE.Color().setHSL(.58+Math.random()*.08,.18,.18+Math.random()*.16),roughness:.85}));
+  base.position.y=h/2; base.castShadow=true; b.add(base);
+  // glowing-looking window rows
+  for(let row=0;row<Math.max(2,Math.floor(h/4));row++){
+    for(let col=-1;col<=1;col++){
+      const win=new THREE.Mesh(new THREE.BoxGeometry(.75,.8,.06),
+        new THREE.MeshStandardMaterial({color:0xf4d77a,emissive:0x332200,emissiveIntensity:.35}));
+      win.position.set(col*(w/4),1.8+row*3.2,d/2+.035);
+      b.add(win);
+    }
+  }
+  b.position.set(Math.cos(a)*r,0,Math.sin(a)*r*1.25);
+  b.rotation.y=-a+Math.PI/2;
+  scene.add(b);
+}
+
+// Car
+const car=new THREE.Group(); scene.add(car);
+const bodyMat=new THREE.MeshStandardMaterial({color:0x15171a,metalness:.75,roughness:.25});
+const accentMat=new THREE.MeshStandardMaterial({color:0xeeeeee,metalness:.5,roughness:.25});
+const glassMat=new THREE.MeshStandardMaterial({color:0x102234,metalness:.2,roughness:.08,transparent:true,opacity:.8});
+
+const body=new THREE.Mesh(new THREE.BoxGeometry(2.35,.62,4.75),bodyMat);
+body.position.y=.75; body.castShadow=true; car.add(body);
+
+const hood=new THREE.Mesh(new THREE.BoxGeometry(2.22,.22,1.25),bodyMat);
+hood.position.set(0,1.06,-1.55); hood.castShadow=true; car.add(hood);
+
+const cabin=new THREE.Mesh(new THREE.BoxGeometry(2.05,.72,2.0),glassMat);
+cabin.position.set(0,1.23,.25); cabin.rotation.x=0.02; cabin.castShadow=true; car.add(cabin);
+
+const bumper=new THREE.Mesh(new THREE.BoxGeometry(2.3,.28,.35),accentMat);
+bumper.position.set(0,.62,-2.38); car.add(bumper);
+
+// wheels
+const wheels=[];
+for(const x of [-1.12,1.12]) for(const z of [-1.55,1.55]){
+  const w=new THREE.Mesh(new THREE.CylinderGeometry(.43,.43,.28,20),
+    new THREE.MeshStandardMaterial({color:0x080808,roughness:.7}));
+  w.rotation.z=Math.PI/2; w.position.set(x,.48,z); w.castShadow=true; car.add(w); wheels.push(w);
+}
+
+// Simple BMW-style kidney grilles
+for(const x of [-.34,.34]){
+  const grille=new THREE.Mesh(new THREE.BoxGeometry(.42,.28,.08),
+    new THREE.MeshStandardMaterial({color:0x050505,metalness:.6}));
+  grille.position.set(x,.78,-2.43); car.add(grille);
+}
+
+const keys={};
+addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true; if(e.code==='Space')keys.space=true});
+addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false; if(e.code==='Space')keys.space=false});
+
+let started=false, speed=0, yaw=0, score=0, driftAngle=0;
+const clock=new THREE.Clock();
+
+function update(){
+  const dt=Math.min(clock.getDelta(),.033);
+  if(!started){renderer.render(scene,camera);requestAnimationFrame(update);return}
+
+  const throttle=keys.w||keys.arrowup;
+  const brake=keys.s||keys.arrowdown;
+  const left=keys.a||keys.arrowleft;
+  const right=keys.d||keys.arrowright;
+  const hand=keys.space;
+  const boost=keys.shift;
+
+  if(throttle) speed+=(boost?48:26)*dt;
+  if(brake) speed-=34*dt;
+  if(!throttle&&!brake) speed*=Math.pow(.985,dt*60);
+  if(hand) speed*=Math.pow(.96,dt*60);
+  speed=THREE.MathUtils.clamp(speed,-18,boost?105:72);
+  document.getElementById('boost').style.opacity=boost&&throttle?'1':'0.55';
+
+  const steer=(left?-1:0)+(right?1:0);
+  const grip=hand?.58:.9;
+  yaw += steer * (1.9 + Math.abs(speed)*.018) * dt * (speed>=0?1:-1) * grip;
+
+  // Drift effect: sideways slip grows with speed, steering and handbrake
+  const targetDrift=THREE.MathUtils.clamp(steer*(hand?.75:.34)*Math.min(Math.abs(speed)/45,1),-.8,.8);
+  driftAngle=THREE.MathUtils.lerp(driftAngle,targetDrift,.12);
+  car.rotation.y=yaw + driftAngle*.32;
+
+  const forward=new THREE.Vector3(Math.sin(yaw),0,Math.cos(yaw));
+  car.position.addScaledVector(forward,speed*dt);
+
+  // Keep car near track
+  const ellipse=((car.position.x/radiusX)**2+(car.position.z/radiusZ)**2);
+  if(ellipse<.68 || ellipse>1.32) speed*=.97;
+
+  // score for controlled drifting
+  if(Math.abs(driftAngle)>.22 && Math.abs(speed)>25) score += Math.floor(Math.abs(speed)*Math.abs(driftAngle)*dt*3);
+
+  wheels.forEach((w,i)=>{ if(i===0||i===2) w.rotation.y=steer*.5; w.rotation.x-=speed*dt*1.8; });
+
+  // Camera chase
+  const camTarget=car.position.clone().add(new THREE.Vector3(0,1,0));
+  const camPos=car.position.clone().add(forward.clone().multiplyScalar(-9)).add(new THREE.Vector3(0,5.5,0));
+  camera.position.lerp(camPos,.08);
+  camera.lookAt(camTarget);
+
+  document.getElementById('speed').textContent=Math.round(Math.abs(speed)*2.2);
+  document.getElementById('drift').textContent=Math.round(Math.abs(driftAngle)*57.3);
+  document.getElementById('score').textContent=Math.floor(score);
+
+  renderer.render(scene,camera);
+  requestAnimationFrame(update);
+}
+document.getElementById('startBtn').onclick=()=>{
+  started=true;
+  document.getElementById('start').style.display='none';
+};
+addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+update();
+</script>
+</body>
+</html>
